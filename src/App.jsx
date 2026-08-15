@@ -23,13 +23,38 @@ function App() {
   const dataChannelRef = useRef(null);
   const remoteAudioRef = useRef(null);
   const startingRef = useRef(false);
+  const connectionGenerationRef = useRef(0);
+  const handoffConnectionRef = useRef(null);
 
-  const releaseConnection = () => {
-    dataChannelRef.current?.close();
+  const closeConnection = (peerConnection, dataChannel) => {
+    try {
+      dataChannel?.close();
+    } catch {
+      // Already closed.
+    }
+
+    try {
+      peerConnection?.close();
+    } catch {
+      // Already closed.
+    }
+  };
+
+  const releaseResources = () => {
+    closeConnection(peerConnectionRef.current, dataChannelRef.current);
+    peerConnectionRef.current = null;
     dataChannelRef.current = null;
 
-    peerConnectionRef.current?.close();
-    peerConnectionRef.current = null;
+    if (handoffConnectionRef.current) {
+      closeConnection(
+        handoffConnectionRef.current.peerConnection,
+        handoffConnectionRef.current.dataChannel
+      );
+      handoffConnectionRef.current = null;
+    }
+
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
 
     if (remoteAudioRef.current) {
       remoteAudioRef.current.pause();
@@ -37,14 +62,8 @@ function App() {
     }
   };
 
-  const releaseResources = () => {
-    releaseConnection();
-
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
-  };
-
   const stopSession = () => {
+    connectionGenerationRef.current += 1;
     releaseResources();
     startingRef.current = false;
     setIsStarting(false);
@@ -59,11 +78,8 @@ function App() {
     remoteAudioRef.current = remoteAudio;
 
     return () => {
-      dataChannelRef.current?.close();
-      peerConnectionRef.current?.close();
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      remoteAudio.pause();
-      remoteAudio.srcObject = null;
+      connectionGenerationRef.current += 1;
+      releaseResources();
     };
   }, []);
 
@@ -91,7 +107,10 @@ function App() {
     return stream;
   };
 
-  const startSession = async (requestedDirection = direction) => {
+  const startSession = async (
+    requestedDirection = direction,
+    { handoff = false } = {}
+  ) => {
     if (startingRef.current) return;
 
     const trimmedApiKey = apiKey.trim();
@@ -102,12 +121,32 @@ function App() {
       return;
     }
 
+    const previousConnection =
+      handoff && peerConnectionRef.current
+        ? {
+            peerConnection: peerConnectionRef.current,
+            dataChannel: dataChannelRef.current,
+          }
+        : null;
+
+    if (previousConnection) {
+      handoffConnectionRef.current = previousConnection;
+      remoteAudioRef.current?.pause();
+    }
+
+    const generation = connectionGenerationRef.current + 1;
+    connectionGenerationRef.current = generation;
+
     startingRef.current = true;
     setIsStarting(true);
+    setIsActive(false);
     setConnectionState('connecting');
-    setStatusMessage('接続中');
+    setStatusMessage(handoff ? '翻訳方向を切り替え中' : '接続中');
     setErrorMessage('');
     setSubtitleText('');
+
+    let peerConnection = null;
+    let dataChannel = null;
 
     try {
       const targetLanguage =
@@ -132,25 +171,41 @@ function App() {
 
       const sourceStream = await getLiveMicrophoneStream();
 
-      const peerConnection = new RTCPeerConnection();
+      peerConnection = new RTCPeerConnection();
       peerConnectionRef.current = peerConnection;
       peerConnection.addTrack(sourceStream.getAudioTracks()[0], sourceStream);
 
       peerConnection.ontrack = ({ streams }) => {
         if (
-          peerConnectionRef.current === peerConnection &&
-          remoteAudioRef.current
+          connectionGenerationRef.current !== generation ||
+          peerConnectionRef.current !== peerConnection ||
+          !remoteAudioRef.current
         ) {
-          remoteAudioRef.current.srcObject = streams[0];
-          remoteAudioRef.current.muted = !voiceEnabled;
-          remoteAudioRef.current.play().catch(() => {});
+          return;
         }
+
+        remoteAudioRef.current.srcObject = streams[0];
+        remoteAudioRef.current.muted = !voiceEnabled;
+        remoteAudioRef.current.play().catch(() => {});
       };
 
       peerConnection.onconnectionstatechange = () => {
-        if (peerConnectionRef.current !== peerConnection) return;
+        if (
+          connectionGenerationRef.current !== generation ||
+          peerConnectionRef.current !== peerConnection
+        ) {
+          return;
+        }
 
         if (peerConnection.connectionState === 'connected') {
+          if (handoffConnectionRef.current) {
+            closeConnection(
+              handoffConnectionRef.current.peerConnection,
+              handoffConnectionRef.current.dataChannel
+            );
+            handoffConnectionRef.current = null;
+          }
+
           startingRef.current = false;
           setIsStarting(false);
           setIsActive(true);
@@ -173,11 +228,16 @@ function App() {
         }
       };
 
-      const dataChannel = peerConnection.createDataChannel('oai-events');
+      dataChannel = peerConnection.createDataChannel('oai-events');
       dataChannelRef.current = dataChannel;
 
       dataChannel.onmessage = ({ data }) => {
-        if (peerConnectionRef.current !== peerConnection) return;
+        if (
+          connectionGenerationRef.current !== generation ||
+          peerConnectionRef.current !== peerConnection
+        ) {
+          return;
+        }
 
         try {
           const event = JSON.parse(data);
@@ -187,7 +247,9 @@ function App() {
           }
 
           if (event.type === 'error') {
-            setErrorMessage(event.error?.message || 'Realtime翻訳でエラーが発生しました。');
+            setErrorMessage(
+              event.error?.message || 'Realtime翻訳でエラーが発生しました。'
+            );
           }
         } catch {
           // 字幕以外のイベントは無視
@@ -197,21 +259,29 @@ function App() {
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
-      const sdpResponse = await fetch('https://api.openai.com/v1/realtime/translations/calls', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.clientSecret}`,
-          'Content-Type': 'application/sdp',
-        },
-        body: offer.sdp,
-      });
+      const sdpResponse = await fetch(
+        'https://api.openai.com/v1/realtime/translations/calls',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session.clientSecret}`,
+            'Content-Type': 'application/sdp',
+          },
+          body: offer.sdp,
+        }
+      );
 
       if (!sdpResponse.ok) {
-        throw new Error(`OpenAI WebRTC接続に失敗しました（${sdpResponse.status}）。`);
+        throw new Error(
+          `OpenAI WebRTC接続に失敗しました（${sdpResponse.status}）。`
+        );
       }
 
-      if (peerConnectionRef.current !== peerConnection) {
-        peerConnection.close();
+      if (
+        connectionGenerationRef.current !== generation ||
+        peerConnectionRef.current !== peerConnection
+      ) {
+        closeConnection(peerConnection, dataChannel);
         return;
       }
 
@@ -220,7 +290,15 @@ function App() {
         sdp: await sdpResponse.text(),
       });
     } catch (error) {
-      releaseResources();
+      if (
+        connectionGenerationRef.current === generation &&
+        peerConnectionRef.current === peerConnection
+      ) {
+        releaseResources();
+      } else {
+        closeConnection(peerConnection, dataChannel);
+      }
+
       startingRef.current = false;
       setIsStarting(false);
       setIsActive(false);
@@ -269,16 +347,7 @@ function App() {
     setErrorMessage('');
 
     if (isActive) {
-      // Keep the live microphone stream. Only replace the translation connection.
-      // This avoids dropping/reacquiring the mic every time SWITCH is pressed.
-      releaseConnection();
-      startingRef.current = false;
-      setIsActive(false);
-      setConnectionState('connecting');
-      setStatusMessage('翻訳方向を切り替え中');
-
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      await startSession(nextDirection);
+      await startSession(nextDirection, { handoff: true });
     }
   };
 
