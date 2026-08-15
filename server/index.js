@@ -1,3 +1,5 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -6,54 +8,52 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
-const openaiApiKey = (process.env.OPENAI_API_KEY || '').trim();
-const apiKeyConfigured = Boolean(
-  openaiApiKey && openaiApiKey !== 'replace_with_your_key_here'
-);
+const isProduction = process.env.NODE_ENV === 'production';
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+if (!isProduction) {
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
 
-      callback(new Error('Origin not allowed by CORS'));
-    },
-    credentials: true,
-  })
-);
+        callback(new Error('Origin not allowed by CORS'));
+      },
+      credentials: true,
+    })
+  );
+}
 
-app.use(express.json());
+app.use(express.json({ limit: '16kb' }));
 
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'realtime-translator-server',
+    mode: 'byok',
     timestamp: new Date().toISOString(),
   });
 });
 
 app.get('/api/config', (req, res) => {
   res.json({
-    provider: apiKeyConfigured ? 'openai' : 'not-configured',
-    apiKeyConfigured,
+    provider: 'openai',
     model: 'gpt-realtime-translate',
-    direction: 'ja -> en',
-    message: apiKeyConfigured
-      ? 'OpenAI realtime translation is ready to use.'
-      : 'OPENAI_API_KEY is not set. Add it to the local server environment and restart the app.'
+    byok: true,
+    message: 'Enter your own OpenAI API key in the app to create a realtime translation session.',
   });
 });
 
 app.post('/api/realtime/session', async (req, res) => {
   const targetLanguage = req.body?.targetLanguage || 'en';
+  const apiKey = String(req.body?.apiKey || '').trim();
 
   if (!['en', 'ja'].includes(targetLanguage)) {
     res.status(400).json({
@@ -62,10 +62,9 @@ app.post('/api/realtime/session', async (req, res) => {
     return;
   }
 
-  if (!apiKeyConfigured) {
-    res.status(503).json({
-      error: 'OPENAI_API_KEY is not configured on the local Node server.',
-      guidance: 'Set OPENAI_API_KEY in your .env file and restart the server.'
+  if (!apiKey) {
+    res.status(400).json({
+      error: 'OpenAI API key is required.',
     });
     return;
   }
@@ -74,12 +73,14 @@ app.post('/api/realtime/session', async (req, res) => {
     const response = await fetch('https://api.openai.com/v1/realtime/translations/client_secrets', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${openaiApiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         session: {
           model: 'gpt-realtime-translate',
+          instructions:
+            'Translate only the words and meaning actually spoken by the speaker. Never add filler words, hesitation sounds, discourse markers, greetings, explanations, or other content that was not present in the source audio. Do not embellish or paraphrase unnecessarily. If the speaker says a single word or a very short phrase, output only its direct natural translation. Preserve the speaker\'s intended meaning as faithfully and concisely as possible.',
           audio: {
             output: {
               language: targetLanguage,
@@ -93,17 +94,14 @@ app.post('/api/realtime/session', async (req, res) => {
 
     if (!response.ok) {
       const openaiError = data?.error || {};
-
-      if (response.status >= 400 && response.status < 500) {
-        console.error('OpenAI Translation client secret request rejected:', {
-          status: response.status,
-          message: openaiError.message || 'Unknown OpenAI error',
-          param: openaiError.param ?? null,
-        });
-      }
+      console.error('OpenAI Translation client secret request rejected:', {
+        status: response.status,
+        message: openaiError.message || 'Unknown OpenAI error',
+        param: openaiError.param ?? null,
+      });
 
       res.status(response.status).json({
-        error: 'Failed to create the OpenAI realtime session.',
+        error: openaiError.message || 'Failed to create the OpenAI realtime session.',
       });
       return;
     }
@@ -114,6 +112,7 @@ app.post('/api/realtime/session', async (req, res) => {
       throw new Error('OpenAI did not return a client secret for the realtime session.');
     }
 
+    res.set('Cache-Control', 'no-store');
     res.json({
       clientSecret,
     });
@@ -126,9 +125,18 @@ app.post('/api/realtime/session', async (req, res) => {
   }
 });
 
+if (isProduction) {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const distPath = path.resolve(__dirname, '../dist');
+
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
 app.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
-  if (!apiKeyConfigured) {
-    console.warn('OPENAI_API_KEY is not set. Realtime translation will be unavailable until it is added to the local environment.');
-  }
+  console.log('Realtime Translator running in BYOK mode.');
 });
