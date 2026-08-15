@@ -213,25 +213,22 @@ function App() {
     });
   };
 
-  const handleDirectionToggle = () => {
+  const handleDirectionToggle = async () => {
     if (isStarting) return;
-
-    if (isActive) {
-      stopSession();
-    }
 
     const nextDirection =
       direction === 'ja-en' ? 'en-ja' : 'ja-en';
 
     setDirection(nextDirection);
     setSubtitleText('');
-    setErrorMessage('');
-    setConnectionState('disconnected');
-    setStatusMessage(
-      nextDirection === 'ja-en'
-        ? '日本語 → English：STARTしてください'
-        : 'English → 日本語：STARTしてください'
-    );
+
+    if (isActive) {
+      releaseResources();
+      startingRef.current = false;
+      setIsActive(false);
+
+      await startSession(nextDirection);
+    }
   };
 
   return (
