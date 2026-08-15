@@ -9,12 +9,3 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     autoDeployTrigger: commit
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: APP_USERNAME
-        sync: false
-      - key: APP_PASSWORD
-        sync: false
