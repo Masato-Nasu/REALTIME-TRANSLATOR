@@ -73,10 +73,6 @@ function App() {
   };
 
   useEffect(() => {
-    const remoteAudio = new Audio();
-    remoteAudio.autoplay = true;
-    remoteAudioRef.current = remoteAudio;
-
     return () => {
       connectionGenerationRef.current += 1;
       releaseResources();
@@ -184,9 +180,20 @@ function App() {
           return;
         }
 
-        remoteAudioRef.current.srcObject = streams[0];
-        remoteAudioRef.current.muted = !voiceEnabled;
-        remoteAudioRef.current.play().catch(() => {});
+        const remoteAudio = remoteAudioRef.current;
+        remoteAudio.srcObject = streams[0];
+        remoteAudio.muted = !voiceEnabled;
+
+        remoteAudio.play().catch((error) => {
+          if (error?.name === 'NotAllowedError') {
+            setErrorMessage(
+              'Androidで音声再生がブロックされました。VOICE OFF → ON をタップしてください。'
+            );
+            return;
+          }
+
+          setErrorMessage('翻訳音声の再生に失敗しました。');
+        });
       };
 
       peerConnection.onconnectionstatechange = () => {
@@ -325,15 +332,26 @@ function App() {
   };
 
   const handleVoiceToggle = () => {
-    setVoiceEnabled((current) => {
-      const next = !current;
+    const next = !voiceEnabled;
+    const remoteAudio = remoteAudioRef.current;
 
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.muted = !next;
+    if (remoteAudio) {
+      remoteAudio.muted = !next;
+
+      if (next && remoteAudio.srcObject) {
+        remoteAudio.play().then(() => {
+          setErrorMessage('');
+        }).catch((error) => {
+          setErrorMessage(
+            error?.name === 'NotAllowedError'
+              ? 'Androidで音声再生が許可されていません。もう一度VOICE ONをタップしてください。'
+              : '翻訳音声の再生に失敗しました。'
+          );
+        });
       }
+    }
 
-      return next;
-    });
+    setVoiceEnabled(next);
   };
 
   const handleDirectionToggle = async () => {
@@ -353,6 +371,14 @@ function App() {
 
   return (
     <div className="app-shell">
+      <audio
+        ref={remoteAudioRef}
+        autoPlay
+        playsInline
+        aria-hidden="true"
+        style={{ display: 'none' }}
+      />
+
       <header className="topbar">
         <div>
           <p className="eyebrow">
