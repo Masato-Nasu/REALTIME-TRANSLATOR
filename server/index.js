@@ -79,6 +79,8 @@ app.post('/api/realtime/session', async (req, res) => {
       body: JSON.stringify({
         session: {
           model: 'gpt-realtime-translate',
+          instructions:
+            'Translate only the words and meaning actually spoken by the speaker. Never add filler words, hesitation sounds, discourse markers, greetings, explanations, or other content that was not present in the source audio. Do not embellish or paraphrase unnecessarily. If the speaker says a single word or a very short phrase, output only its direct natural translation. Preserve the speaker\'s intended meaning as faithfully and concisely as possible.',
           audio: {
             output: {
               language: targetLanguage,
