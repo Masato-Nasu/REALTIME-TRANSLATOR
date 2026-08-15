@@ -1,3 +1,6 @@
+import crypto from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -6,29 +9,84 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
+const isProduction = process.env.NODE_ENV === 'production';
 const openaiApiKey = (process.env.OPENAI_API_KEY || '').trim();
 const apiKeyConfigured = Boolean(
   openaiApiKey && openaiApiKey !== 'replace_with_your_key_here'
 );
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const appUsername = (process.env.APP_USERNAME || '').trim();
+const appPassword = (process.env.APP_PASSWORD || '').trim();
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
+const safeEqual = (left, right) => {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
 
-      callback(new Error('Origin not allowed by CORS'));
-    },
-    credentials: true,
-  })
-);
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    crypto.timingSafeEqual(leftBuffer, rightBuffer)
+  );
+};
+
+const requireAppAccess = (req, res, next) => {
+  if (!isProduction || req.path === '/api/health') {
+    next();
+    return;
+  }
+
+  if (!appUsername || !appPassword) {
+    res.status(503).send('App access credentials are not configured.');
+    return;
+  }
+
+  const authorization = req.headers.authorization || '';
+
+  if (!authorization.startsWith('Basic ')) {
+    res.set('WWW-Authenticate', 'Basic realm="Realtime Translator"');
+    res.status(401).send('Authentication required.');
+    return;
+  }
+
+  try {
+    const decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8');
+    const separatorIndex = decoded.indexOf(':');
+    const username = separatorIndex >= 0 ? decoded.slice(0, separatorIndex) : '';
+    const password = separatorIndex >= 0 ? decoded.slice(separatorIndex + 1) : '';
+
+    if (safeEqual(username, appUsername) && safeEqual(password, appPassword)) {
+      next();
+      return;
+    }
+  } catch {
+    // Fall through to the authentication challenge.
+  }
+
+  res.set('WWW-Authenticate', 'Basic realm="Realtime Translator"');
+  res.status(401).send('Authentication required.');
+};
+
+app.use(requireAppAccess);
+
+if (!isProduction) {
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+          return;
+        }
+
+        callback(new Error('Origin not allowed by CORS'));
+      },
+      credentials: true,
+    })
+  );
+}
 
 app.use(express.json());
 
@@ -126,9 +184,23 @@ app.post('/api/realtime/session', async (req, res) => {
   }
 });
 
+if (isProduction) {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const distPath = path.resolve(__dirname, '../dist');
+
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
+
 app.listen(port, () => {
   console.log(`Server listening on http://localhost:${port}`);
   if (!apiKeyConfigured) {
     console.warn('OPENAI_API_KEY is not set. Realtime translation will be unavailable until it is added to the local environment.');
+  }
+  if (isProduction && (!appUsername || !appPassword)) {
+    console.warn('APP_USERNAME and APP_PASSWORD must be set before the production app can be used.');
   }
 });
