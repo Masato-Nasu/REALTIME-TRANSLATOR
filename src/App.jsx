@@ -184,6 +184,13 @@ function App() {
     startSession(direction);
   };
 
+  const handleStartStopClick = (event) => {
+    // Pointer input is handled on pointerup below. Keep native keyboard activation.
+    if (event.detail === 0) {
+      handleStartStop();
+    }
+  };
+
   const handleVoiceToggle = () => {
     setVoiceEnabled((current) => {
       const next = !current;
@@ -260,7 +267,12 @@ function App() {
           {voiceEnabled ? '🔊 VOICE ON' : '🔇 VOICE OFF'}
         </button>
 
-        <button className="primary" onClick={handleStartStop} disabled={isStarting}>
+        <button
+          className="primary"
+          onPointerUp={handleStartStop}
+          onClick={handleStartStopClick}
+          disabled={isStarting}
+        >
           {isActive ? 'STOP' : isStarting ? 'STARTING...' : 'START'}
         </button>
       </footer>
