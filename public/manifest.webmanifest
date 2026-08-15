@@ -1,0 +1,17 @@
+{
+  "name": "Realtime Translator",
+  "short_name": "Translator",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020817",
+  "theme_color": "#0f172a",
+  "description": "対面通訳向けの日本語から英語リアルタイム翻訳PWA",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
