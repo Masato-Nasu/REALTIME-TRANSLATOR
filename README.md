@@ -3,6 +3,10 @@
 **日本語 ⇄ English のリアルタイム音声翻訳アプリ。**  
 OpenAI `gpt-realtime-translate` と WebRTC を使い、話した内容を翻訳音声と字幕で返します。
 
+## 🌐 Public PWA
+
+**https://realtime-translator.1bitexist.workers.dev**
+
 <p align="center">
   <img src="docs/screenshot.png" width="900" alt="REALTIME TRANSLATOR screenshot">
 </p>
