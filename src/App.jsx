@@ -16,6 +16,7 @@ function App() {
   const [subtitleText, setSubtitleText] = useState('');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [direction, setDirection] = useState('ja-en');
+  const [apiKey, setApiKey] = useState('');
 
   const mediaStreamRef = useRef(null);
   const peerConnectionRef = useRef(null);
@@ -65,6 +66,14 @@ function App() {
   const startSession = async (requestedDirection = direction) => {
     if (startingRef.current) return;
 
+    const trimmedApiKey = apiKey.trim();
+    if (!trimmedApiKey) {
+      setErrorMessage('OpenAI API KEYを入力してください。');
+      setConnectionState('error');
+      setStatusMessage('API KEYが必要です');
+      return;
+    }
+
     startingRef.current = true;
     setIsStarting(true);
     setConnectionState('connecting');
@@ -83,6 +92,7 @@ function App() {
         },
         body: JSON.stringify({
           targetLanguage,
+          apiKey: trimmedApiKey,
         }),
       });
 
@@ -236,6 +246,46 @@ function App() {
           {CONNECTION_LABELS[connectionState]}
         </div>
       </header>
+
+      <div
+        style={{
+          display: 'grid',
+          gap: '7px',
+          padding: '14px 16px',
+          border: '1px solid rgba(148, 163, 184, 0.22)',
+          borderRadius: '16px',
+          background: 'rgba(15, 23, 42, 0.72)',
+        }}
+      >
+        <label
+          htmlFor="openai-api-key"
+          style={{ color: '#cbd5e1', fontSize: '0.82rem', fontWeight: 700 }}
+        >
+          OPENAI API KEY — BYOK
+        </label>
+        <input
+          id="openai-api-key"
+          type="password"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+          placeholder="sk-..."
+          autoComplete="off"
+          spellCheck="false"
+          disabled={isStarting || isActive}
+          style={{
+            width: '100%',
+            padding: '12px 14px',
+            borderRadius: '12px',
+            border: '1px solid rgba(148, 163, 184, 0.28)',
+            background: '#020817',
+            color: '#f8fafc',
+            font: 'inherit',
+          }}
+        />
+        <span style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+          キーは保存しません。セッション作成時にのみバックエンドへ送信します。
+        </span>
+      </div>
 
       <button
         className="direction-toggle"
