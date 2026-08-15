@@ -24,20 +24,24 @@ function App() {
   const remoteAudioRef = useRef(null);
   const startingRef = useRef(false);
 
-  const releaseResources = () => {
+  const releaseConnection = () => {
     dataChannelRef.current?.close();
     dataChannelRef.current = null;
 
     peerConnectionRef.current?.close();
     peerConnectionRef.current = null;
 
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
-
     if (remoteAudioRef.current) {
       remoteAudioRef.current.pause();
       remoteAudioRef.current.srcObject = null;
     }
+  };
+
+  const releaseResources = () => {
+    releaseConnection();
+
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
   };
 
   const stopSession = () => {
@@ -62,6 +66,30 @@ function App() {
       remoteAudio.srcObject = null;
     };
   }, []);
+
+  const getLiveMicrophoneStream = async () => {
+    const currentStream = mediaStreamRef.current;
+    const currentTrack = currentStream?.getAudioTracks?.()[0];
+
+    if (
+      currentStream?.active &&
+      currentTrack &&
+      currentTrack.readyState === 'live'
+    ) {
+      return currentStream;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    mediaStreamRef.current = stream;
+    return stream;
+  };
 
   const startSession = async (requestedDirection = direction) => {
     if (startingRef.current) return;
@@ -102,20 +130,26 @@ function App() {
         throw new Error(session.error || '翻訳セッションを作成できませんでした。');
       }
 
-      const sourceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = sourceStream;
+      const sourceStream = await getLiveMicrophoneStream();
 
       const peerConnection = new RTCPeerConnection();
       peerConnectionRef.current = peerConnection;
       peerConnection.addTrack(sourceStream.getAudioTracks()[0], sourceStream);
 
       peerConnection.ontrack = ({ streams }) => {
-        if (remoteAudioRef.current) {
+        if (
+          peerConnectionRef.current === peerConnection &&
+          remoteAudioRef.current
+        ) {
           remoteAudioRef.current.srcObject = streams[0];
+          remoteAudioRef.current.muted = !voiceEnabled;
+          remoteAudioRef.current.play().catch(() => {});
         }
       };
 
       peerConnection.onconnectionstatechange = () => {
+        if (peerConnectionRef.current !== peerConnection) return;
+
         if (peerConnection.connectionState === 'connected') {
           startingRef.current = false;
           setIsStarting(false);
@@ -143,11 +177,17 @@ function App() {
       dataChannelRef.current = dataChannel;
 
       dataChannel.onmessage = ({ data }) => {
+        if (peerConnectionRef.current !== peerConnection) return;
+
         try {
           const event = JSON.parse(data);
 
           if (event.type === 'session.output_transcript.delta') {
             setSubtitleText((current) => current + event.delta);
+          }
+
+          if (event.type === 'error') {
+            setErrorMessage(event.error?.message || 'Realtime翻訳でエラーが発生しました。');
           }
         } catch {
           // 字幕以外のイベントは無視
@@ -168,6 +208,11 @@ function App() {
 
       if (!sdpResponse.ok) {
         throw new Error(`OpenAI WebRTC接続に失敗しました（${sdpResponse.status}）。`);
+      }
+
+      if (peerConnectionRef.current !== peerConnection) {
+        peerConnection.close();
+        return;
       }
 
       await peerConnection.setRemoteDescription({
@@ -221,12 +266,18 @@ function App() {
 
     setDirection(nextDirection);
     setSubtitleText('');
+    setErrorMessage('');
 
     if (isActive) {
-      releaseResources();
+      // Keep the live microphone stream. Only replace the translation connection.
+      // This avoids dropping/reacquiring the mic every time SWITCH is pressed.
+      releaseConnection();
       startingRef.current = false;
       setIsActive(false);
+      setConnectionState('connecting');
+      setStatusMessage('翻訳方向を切り替え中');
 
+      await new Promise((resolve) => setTimeout(resolve, 120));
       await startSession(nextDirection);
     }
   };
