@@ -19,7 +19,6 @@ https://realtime-translator.1bitexist.workers.dev
 - English → 日本語
 - 翻訳字幕をリアルタイム表示
 - 翻訳音声 `VOICE ON / OFF`
-- スマホ用の音声増幅 `標準 1.0倍 / 大 1.5倍 / 最大 2.0倍`
 - `START / STOP`
 - `⇄ SWITCH` で翻訳方向を変更
 - 1つの Realtime translation session だけを使用
