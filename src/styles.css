@@ -312,7 +312,7 @@ button:disabled {
 
 /* Translation voice toggle */
 .controls {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
 }
 
 .voice-toggle {
@@ -331,6 +331,19 @@ button:disabled {
   border-color: rgba(148, 163, 184, 0.28);
   color: #cbd5e1;
 }
+
+.volume-level {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  background: rgba(14, 165, 233, 0.14);
+  color: #e0f2fe;
+}
+
+.volume-level strong { color: #7dd3fc; }
+.volume-level small { color: #94a3b8; font-size: 0.75rem; }
 
 @media (max-width: 768px) {
   .controls {

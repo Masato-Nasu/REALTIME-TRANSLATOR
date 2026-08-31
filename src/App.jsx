@@ -7,6 +7,12 @@ const CONNECTION_LABELS = {
   error: 'エラー',
 };
 
+const VOLUME_LEVELS = [
+  { label: '標準', gain: 1 },
+  { label: '大', gain: 1.5 },
+  { label: '最大', gain: 2 },
+];
+
 function App() {
   const [connectionState, setConnectionState] = useState('disconnected');
   const [statusMessage, setStatusMessage] = useState('準備完了');
@@ -15,6 +21,7 @@ function App() {
   const [isActive, setIsActive] = useState(false);
   const [subtitleText, setSubtitleText] = useState('');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [volumeLevel, setVolumeLevel] = useState(1);
   const [direction, setDirection] = useState('ja-en');
   const [apiKey, setApiKey] = useState('');
 
@@ -22,9 +29,47 @@ function App() {
   const peerConnectionRef = useRef(null);
   const dataChannelRef = useRef(null);
   const remoteAudioRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const remoteSourceRef = useRef(null);
+  const gainNodeRef = useRef(null);
   const startingRef = useRef(false);
   const connectionGenerationRef = useRef(0);
   const handoffConnectionRef = useRef(null);
+
+  const applyOutputGain = (enabled = voiceEnabled, level = volumeLevel) => {
+    if (!gainNodeRef.current || !audioContextRef.current) return;
+    gainNodeRef.current.gain.setTargetAtTime(
+      enabled ? VOLUME_LEVELS[level].gain : 0,
+      audioContextRef.current.currentTime,
+      0.01
+    );
+  };
+
+  const prepareAudioOutput = async () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return false;
+
+    if (!audioContextRef.current) {
+      const context = new AudioContextClass({ latencyHint: 'interactive' });
+      const gain = context.createGain();
+      const limiter = context.createDynamicsCompressor();
+      limiter.threshold.value = -4;
+      limiter.knee.value = 8;
+      limiter.ratio.value = 12;
+      limiter.attack.value = 0.003;
+      limiter.release.value = 0.25;
+      gain.connect(limiter);
+      limiter.connect(context.destination);
+      audioContextRef.current = context;
+      gainNodeRef.current = gain;
+      gain.gain.value = VOLUME_LEVELS[volumeLevel].gain;
+    }
+
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+    return true;
+  };
 
   const closeConnection = (peerConnection, dataChannel) => {
     try {
@@ -60,6 +105,8 @@ function App() {
       remoteAudioRef.current.pause();
       remoteAudioRef.current.srcObject = null;
     }
+    remoteSourceRef.current?.disconnect();
+    remoteSourceRef.current = null;
   };
 
   const stopSession = () => {
@@ -80,6 +127,7 @@ function App() {
     return () => {
       connectionGenerationRef.current += 1;
       releaseResources();
+      audioContextRef.current?.close();
     };
   }, []);
 
@@ -149,6 +197,7 @@ function App() {
     let dataChannel = null;
 
     try {
+      const canBoostAudio = await prepareAudioOutput();
       const targetLanguage =
         requestedDirection === 'ja-en' ? 'en' : 'ja';
 
@@ -184,9 +233,19 @@ function App() {
           return;
         }
 
-        remoteAudioRef.current.srcObject = streams[0];
-        remoteAudioRef.current.muted = !voiceEnabled;
-        remoteAudioRef.current.play().catch(() => {});
+        remoteSourceRef.current?.disconnect();
+        if (canBoostAudio && audioContextRef.current && gainNodeRef.current) {
+          remoteAudioRef.current.pause();
+          remoteAudioRef.current.srcObject = null;
+          remoteSourceRef.current =
+            audioContextRef.current.createMediaStreamSource(streams[0]);
+          remoteSourceRef.current.connect(gainNodeRef.current);
+          applyOutputGain();
+        } else {
+          remoteAudioRef.current.srcObject = streams[0];
+          remoteAudioRef.current.muted = !voiceEnabled;
+          remoteAudioRef.current.play().catch(() => {});
+        }
       };
 
       peerConnection.onconnectionstatechange = () => {
@@ -331,7 +390,16 @@ function App() {
       if (remoteAudioRef.current) {
         remoteAudioRef.current.muted = !next;
       }
+      applyOutputGain(next, volumeLevel);
 
+      return next;
+    });
+  };
+
+  const handleVolumeLevel = () => {
+    setVolumeLevel((current) => {
+      const next = (current + 1) % VOLUME_LEVELS.length;
+      applyOutputGain(voiceEnabled, next);
       return next;
     });
   };
@@ -435,6 +503,12 @@ function App() {
           onClick={handleVoiceToggle}
         >
           {voiceEnabled ? '🔊 VOICE ON' : '🔇 VOICE OFF'}
+        </button>
+
+        <button className="volume-level" onClick={handleVolumeLevel}>
+          <span>🔊 音量</span>
+          <strong>{VOLUME_LEVELS[volumeLevel].label}</strong>
+          <small>{VOLUME_LEVELS[volumeLevel].gain.toFixed(1)}倍</small>
         </button>
 
         <button
