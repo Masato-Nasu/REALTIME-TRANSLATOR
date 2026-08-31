@@ -33,7 +33,6 @@ function App() {
   const remoteSourceRef = useRef(null);
   const remoteStreamRef = useRef(null);
   const gainNodeRef = useRef(null);
-  const processedOutputRef = useRef(null);
   const startingRef = useRef(false);
   const connectionGenerationRef = useRef(0);
   const handoffConnectionRef = useRef(null);
@@ -55,20 +54,15 @@ function App() {
       const context = new AudioContextClass({ latencyHint: 'interactive' });
       const gain = context.createGain();
       const limiter = context.createDynamicsCompressor();
-      const processedOutput = context.createMediaStreamDestination();
       limiter.threshold.value = -4;
       limiter.knee.value = 8;
       limiter.ratio.value = 12;
       limiter.attack.value = 0.003;
       limiter.release.value = 0.25;
       gain.connect(limiter);
-      // Send processed audio back through an HTML Audio element. Some mobile
-      // browsers are silent when a microphone call is routed directly to the
-      // AudioContext destination, while native Audio playback still works.
-      limiter.connect(processedOutput);
+      limiter.connect(context.destination);
       audioContextRef.current = context;
       gainNodeRef.current = gain;
-      processedOutputRef.current = processedOutput;
       gain.gain.value = VOLUME_LEVELS[volumeLevel].gain;
     }
 
@@ -95,25 +89,19 @@ function App() {
     }
 
     const canBoostAudio = await prepareAudioOutput().catch(() => false);
-    if (
-      !canBoostAudio ||
-      !audioContextRef.current ||
-      !gainNodeRef.current ||
-      !processedOutputRef.current
-    ) {
+    if (!canBoostAudio || !audioContextRef.current || !gainNodeRef.current) {
       remoteAudioRef.current.srcObject = stream;
       remoteAudioRef.current.muted = !voiceEnabled;
       await remoteAudioRef.current.play().catch(() => {});
       return;
     }
 
+    remoteAudioRef.current.pause();
+    remoteAudioRef.current.srcObject = null;
     remoteSourceRef.current =
       audioContextRef.current.createMediaStreamSource(stream);
     remoteSourceRef.current.connect(gainNodeRef.current);
     applyOutputGain(voiceEnabled, level);
-    remoteAudioRef.current.srcObject = processedOutputRef.current.stream;
-    remoteAudioRef.current.muted = false;
-    await remoteAudioRef.current.play().catch(() => {});
   };
 
   const closeConnection = (peerConnection, dataChannel) => {
