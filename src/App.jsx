@@ -21,7 +21,7 @@ function App() {
   const [isActive, setIsActive] = useState(false);
   const [subtitleText, setSubtitleText] = useState('');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [volumeLevel, setVolumeLevel] = useState(0);
+  const [volumeLevel, setVolumeLevel] = useState(1);
   const [direction, setDirection] = useState('ja-en');
   const [apiKey, setApiKey] = useState('');
 
@@ -31,7 +31,6 @@ function App() {
   const remoteAudioRef = useRef(null);
   const audioContextRef = useRef(null);
   const remoteSourceRef = useRef(null);
-  const remoteStreamRef = useRef(null);
   const gainNodeRef = useRef(null);
   const startingRef = useRef(false);
   const connectionGenerationRef = useRef(0);
@@ -72,38 +71,6 @@ function App() {
     return true;
   };
 
-  const playRemoteStream = async (stream, level = volumeLevel) => {
-    if (!remoteAudioRef.current) return;
-
-    remoteStreamRef.current = stream;
-    remoteSourceRef.current?.disconnect();
-    remoteSourceRef.current = null;
-
-    // Standard mode deliberately uses native playback. This is the most
-    // reliable output path on Android/iOS while the microphone is active.
-    if (level === 0) {
-      remoteAudioRef.current.srcObject = stream;
-      remoteAudioRef.current.muted = !voiceEnabled;
-      await remoteAudioRef.current.play().catch(() => {});
-      return;
-    }
-
-    const canBoostAudio = await prepareAudioOutput().catch(() => false);
-    if (!canBoostAudio || !audioContextRef.current || !gainNodeRef.current) {
-      remoteAudioRef.current.srcObject = stream;
-      remoteAudioRef.current.muted = !voiceEnabled;
-      await remoteAudioRef.current.play().catch(() => {});
-      return;
-    }
-
-    remoteAudioRef.current.pause();
-    remoteAudioRef.current.srcObject = null;
-    remoteSourceRef.current =
-      audioContextRef.current.createMediaStreamSource(stream);
-    remoteSourceRef.current.connect(gainNodeRef.current);
-    applyOutputGain(voiceEnabled, level);
-  };
-
   const closeConnection = (peerConnection, dataChannel) => {
     try {
       dataChannel?.close();
@@ -140,7 +107,6 @@ function App() {
     }
     remoteSourceRef.current?.disconnect();
     remoteSourceRef.current = null;
-    remoteStreamRef.current = null;
   };
 
   const stopSession = () => {
@@ -231,6 +197,7 @@ function App() {
     let dataChannel = null;
 
     try {
+      const canBoostAudio = await prepareAudioOutput();
       const targetLanguage =
         requestedDirection === 'ja-en' ? 'en' : 'ja';
 
@@ -266,7 +233,19 @@ function App() {
           return;
         }
 
-        playRemoteStream(streams[0], volumeLevel);
+        remoteSourceRef.current?.disconnect();
+        if (canBoostAudio && audioContextRef.current && gainNodeRef.current) {
+          remoteAudioRef.current.pause();
+          remoteAudioRef.current.srcObject = null;
+          remoteSourceRef.current =
+            audioContextRef.current.createMediaStreamSource(streams[0]);
+          remoteSourceRef.current.connect(gainNodeRef.current);
+          applyOutputGain();
+        } else {
+          remoteAudioRef.current.srcObject = streams[0];
+          remoteAudioRef.current.muted = !voiceEnabled;
+          remoteAudioRef.current.play().catch(() => {});
+        }
       };
 
       peerConnection.onconnectionstatechange = () => {
@@ -417,15 +396,12 @@ function App() {
     });
   };
 
-  const handleVolumeLevel = async () => {
-    const next = (volumeLevel + 1) % VOLUME_LEVELS.length;
-    setVolumeLevel(next);
-
-    if (remoteStreamRef.current) {
-      await playRemoteStream(remoteStreamRef.current, next);
-    } else {
+  const handleVolumeLevel = () => {
+    setVolumeLevel((current) => {
+      const next = (current + 1) % VOLUME_LEVELS.length;
       applyOutputGain(voiceEnabled, next);
-    }
+      return next;
+    });
   };
 
   const handleDirectionToggle = async () => {
